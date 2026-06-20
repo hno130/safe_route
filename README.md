@@ -40,7 +40,7 @@
 ## 실행 방법
 
 ```powershell
-cd 
+cd C:\Users\hno13\Documents\Codex\2026-06-11\html-css-javascript-leaflet-js-10\outputs\safe-walk-route
 py -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
 .\.venv\Scripts\python -m pip install -r requirements-osmnx.txt
@@ -215,6 +215,23 @@ DB 저장 상태는 아래 API로 확인할 수 있습니다.
 GET /api/db/stats
 GET /api/routes/history
 ```
+
+## CI/CD
+
+GitHub Actions를 사용하여 `main` 브랜치에 push 또는 pull request가 발생할 때 자동 검사를 수행합니다.
+
+워크플로우 파일:
+
+```text
+.github/workflows/ci.yml
+```
+
+자동 검사 항목은 다음과 같습니다.
+
+- Python 의존성 설치
+- `app.py` 문법 검사
+- FastAPI 앱 import 검사
+- `static/app.js` JavaScript 문법 검사
 
 ## 경로 설명 기능
 
