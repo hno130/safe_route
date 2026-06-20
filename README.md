@@ -40,7 +40,7 @@
 ## 실행 방법
 
 ```powershell
-cd C:\Users\hno13\Documents\Codex\2026-06-11\html-css-javascript-leaflet-js-10\outputs\safe-walk-route
+cd 
 py -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
 .\.venv\Scripts\python -m pip install -r requirements-osmnx.txt
