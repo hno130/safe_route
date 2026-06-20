@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SafeWalk Seoul</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIINfQOo3zY9mywP0rPhNdpBi7g+6qS+kEQ="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div>
+            <strong>SafeWalk Seoul</strong>
+            <span>보행 위험 회피 경로 비교</span>
+          </div>
+        </div>
+        <div class="toolbar" aria-label="지도 도구">
+          <button id="demoRouteBtn" class="icon-button text-button" title="샘플 경로">
+            <i data-lucide="route"></i>
+            <span>샘플</span>
+          </button>
+          <button id="locateBtn" class="icon-button" title="현재 위치">
+            <i data-lucide="crosshair"></i>
+          </button>
+          <button id="resetBtn" class="icon-button" title="초기화">
+            <i data-lucide="rotate-ccw"></i>
+          </button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <div id="map" aria-label="서울 안전 도보 지도"></div>
+
+        <aside class="panel" aria-label="경로 분석 패널">
+          <section class="status-strip">
+            <div class="step active" id="stepStart">출발</div>
+            <div class="step" id="stepEnd">도착</div>
+            <div class="step" id="stepRoute">분석</div>
+          </section>
+
+          <section class="selection">
+            <div>
+              <span class="field-label">출발지</span>
+              <strong id="startText">대기 중</strong>
+            </div>
+            <div>
+              <span class="field-label">도착지</span>
+              <strong id="endText">대기 중</strong>
+            </div>
+          </section>
+
+          <section class="legend">
+            <div><span class="line normal"></span>일반 경로</div>
+            <div><span class="line safe"></span>안전 경로</div>
+            <div><span class="heat-dot"></span>사고 밀도</div>
+            <div><span class="safe-dot"></span>안전시설</div>
+          </section>
+
+          <section class="summary">
+            <div class="metric">
+              <span>위험 절감</span>
+              <strong id="riskReduction">-</strong>
+            </div>
+            <div class="metric">
+              <span>안전 개선</span>
+              <strong id="safetyDelta">-</strong>
+            </div>
+            <div class="metric">
+              <span>우회 거리</span>
+              <strong id="detourDelta">-</strong>
+            </div>
+            <div class="metric">
+              <span>데이터</span>
+              <strong id="dataSource">로딩</strong>
+            </div>
+          </section>
+
+          <section class="route-grid">
+            <article class="route-card normal-card">
+              <div class="route-card-header">
+                <div class="route-title">
+                  <span>일반</span>
+                  <em id="normalGrade" class="grade-badge">-</em>
+                </div>
+                <strong id="normalDistance">-</strong>
+              </div>
+              <dl>
+                <div>
+                  <dt>위험도</dt>
+                  <dd id="normalRisk">-</dd>
+                </div>
+                <div>
+                  <dt>안전점수</dt>
+                  <dd id="normalAssurance">-</dd>
+                </div>
+                <div>
+                  <dt>사고지점</dt>
+                  <dd id="normalHotspots">-</dd>
+                </div>
+                <div>
+                  <dt>예상</dt>
+                  <dd id="normalEta">-</dd>
+                </div>
+              </dl>
+            </article>
+
+            <article class="route-card safe-card">
+              <div class="route-card-header">
+                <div class="route-title">
+                  <span>안전</span>
+                  <em id="safeGrade" class="grade-badge">-</em>
+                </div>
+                <strong id="safeDistance">-</strong>
+              </div>
+              <dl>
+                <div>
+                  <dt>위험도</dt>
+                  <dd id="safeRisk">-</dd>
+                </div>
+                <div>
+                  <dt>안전점수</dt>
+                  <dd id="safeAssurance">-</dd>
+                </div>
+                <div>
+                  <dt>사고지점</dt>
+                  <dd id="safeHotspots">-</dd>
+                </div>
+                <div>
+                  <dt>예상</dt>
+                  <dd id="safeEta">-</dd>
+                </div>
+              </dl>
+            </article>
+          </section>
+
+          <section class="safe-options" aria-label="안전 경로 후보">
+            <div class="safe-options-header">
+              <span>안전 경로 후보</span>
+              <strong>최대 3개</strong>
+            </div>
+            <div id="safeOptionList" class="safe-option-list"></div>
+          </section>
+
+          <section class="explanation-panel" aria-label="안전 경로 선택 이유">
+            <div class="explanation-header">
+              <span>선택 이유</span>
+              <strong id="explanationSource">로컬</strong>
+            </div>
+            <p id="routeExplanation">경로를 선택하면 안전 경로 선택 이유가 표시됩니다.</p>
+            <ul id="explanationBullets"></ul>
+          </section>
+
+          <section class="safety-strip" aria-label="안전시설 요약">
+            <div>
+              <span class="facility-dot lamp"></span>
+              <strong id="safetyLights">-</strong>
+              <span>가로등</span>
+            </div>
+            <div>
+              <span class="facility-dot cctv"></span>
+              <strong id="safetyCctv">-</strong>
+              <span>CCTV</span>
+            </div>
+            <div>
+              <span class="facility-dot help"></span>
+              <strong id="safetyHelp">-</strong>
+              <span>안심거점</span>
+            </div>
+            <div>
+              <span class="facility-dot crossing"></span>
+              <strong id="safetyCrossing">-</strong>
+              <span>횡단</span>
+            </div>
+          </section>
+
+          <section class="layer-panel">
+            <label class="toggle">
+              <input id="heatToggle" type="checkbox" checked />
+              <span>히트맵</span>
+            </label>
+            <label class="toggle">
+              <input id="pointToggle" type="checkbox" />
+              <span>지점</span>
+            </label>
+            <label class="toggle">
+              <input id="safetyToggle" type="checkbox" checked />
+              <span>안전시설</span>
+            </label>
+            <span id="routerMode" class="router-mode">-</span>
+          </section>
+
+          <p id="message" class="message" role="status">출발지를 기다리는 중</p>
+        </aside>
+      </main>
+    </div>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
