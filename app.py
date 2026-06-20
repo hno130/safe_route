@@ -6,6 +6,8 @@ import os
 import time
 import xml.etree.ElementTree as ET
 import csv
+import hashlib
+import sqlite3
 from heapq import heappop, heappush
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,7 @@ from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+DATABASE_PATH = Path(os.getenv("SAFEWALK_DB_PATH", BASE_DIR / "safewalk.db"))
 
 ACCIDENT_CACHE_TTL_SECONDS = 60 * 30
 GRID_SIZE = 35
@@ -137,6 +140,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def startup() -> None:
+    init_database()
 
 
 @app.middleware("http")
@@ -270,6 +278,160 @@ _safety_cache: dict[str, dict[str, Any]] = {}
 _walk_graph_cache: dict[str, Any] = {}
 
 
+def db_connection() -> sqlite3.Connection:
+    DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DATABASE_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_database() -> None:
+    with db_connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS route_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at INTEGER NOT NULL,
+                start_lat REAL NOT NULL,
+                start_lng REAL NOT NULL,
+                end_lat REAL NOT NULL,
+                end_lng REAL NOT NULL,
+                router TEXT NOT NULL,
+                accident_source TEXT,
+                safety_source TEXT,
+                normal_distance_m REAL,
+                safe_distance_m REAL,
+                normal_risk_score REAL,
+                safe_risk_score REAL,
+                risk_reduction_percent REAL,
+                safe_option_count INTEGER,
+                explanation_summary TEXT,
+                request_json TEXT NOT NULL,
+                response_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS data_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at INTEGER NOT NULL,
+                source_type TEXT NOT NULL,
+                source TEXT NOT NULL,
+                item_count INTEGER NOT NULL,
+                summary_json TEXT,
+                payload_hash TEXT NOT NULL,
+                bbox TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_route_requests_created_at
+            ON route_requests(created_at DESC)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_data_snapshots_type_created_at
+            ON data_snapshots(source_type, created_at DESC)
+            """
+        )
+
+
+def fetch_rows(
+    conn: sqlite3.Connection, query: str, params: tuple[Any, ...] = ()
+) -> list[dict[str, Any]]:
+    return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+
+def json_dumps(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def payload_hash(value: Any) -> str:
+    return hashlib.sha256(json_dumps(value).encode("utf-8")).hexdigest()
+
+
+def store_route_request(
+    start: dict[str, float], end: dict[str, float], result: dict[str, Any]
+) -> None:
+    try:
+        init_database()
+        normal = result.get("normal") or {}
+        safe = result.get("safe") or {}
+        comparison = result.get("comparison") or {}
+        explanation = result.get("explanation") or {}
+        request_payload = {"start": start, "end": end}
+        with db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO route_requests (
+                    created_at, start_lat, start_lng, end_lat, end_lng, router,
+                    accident_source, safety_source, normal_distance_m,
+                    safe_distance_m, normal_risk_score, safe_risk_score,
+                    risk_reduction_percent, safe_option_count,
+                    explanation_summary, request_json, response_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(time.time()),
+                    float(start["lat"]),
+                    float(start["lng"]),
+                    float(end["lat"]),
+                    float(end["lng"]),
+                    str(result.get("router") or "unknown"),
+                    result.get("accident_source"),
+                    result.get("safety_source"),
+                    normal.get("distance_m"),
+                    safe.get("distance_m"),
+                    normal.get("risk_score"),
+                    safe.get("risk_score"),
+                    comparison.get("risk_reduction_percent"),
+                    len(result.get("safe_options") or []),
+                    explanation.get("summary"),
+                    json_dumps(request_payload),
+                    json_dumps(result),
+                ),
+            )
+    except Exception as exc:
+        print(f"DB route history save failed: {exc}")
+
+
+def store_data_snapshot(
+    source_type: str,
+    payload: dict[str, Any],
+    bbox: tuple[float, float, float, float] | None = None,
+) -> None:
+    try:
+        init_database()
+        items = payload.get("items") or []
+        summary = payload.get("summary") or {}
+        bbox_text = ",".join(f"{value:.7f}" for value in bbox) if bbox else None
+        with db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO data_snapshots (
+                    created_at, source_type, source, item_count,
+                    summary_json, payload_hash, bbox
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(time.time()),
+                    source_type,
+                    str(payload.get("source") or "unknown"),
+                    len(items),
+                    json_dumps(summary),
+                    payload_hash({"source_type": source_type, "bbox": bbox_text, "items": items}),
+                    bbox_text,
+                ),
+            )
+    except Exception as exc:
+        print(f"DB data snapshot save failed: {exc}")
+
+
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
@@ -278,6 +440,61 @@ def index() -> FileResponse:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/db/stats")
+def database_stats() -> dict[str, Any]:
+    init_database()
+    with db_connection() as conn:
+        route_count = conn.execute("SELECT COUNT(*) FROM route_requests").fetchone()[0]
+        snapshot_count = conn.execute("SELECT COUNT(*) FROM data_snapshots").fetchone()[0]
+        latest_routes = fetch_rows(
+            conn,
+            """
+            SELECT id, created_at, router, start_lat, start_lng, end_lat, end_lng,
+                   normal_distance_m, safe_distance_m, normal_risk_score,
+                   safe_risk_score, risk_reduction_percent, safe_option_count
+            FROM route_requests
+            ORDER BY id DESC
+            LIMIT 5
+            """,
+        )
+        latest_snapshots = fetch_rows(
+            conn,
+            """
+            SELECT id, created_at, source_type, source, item_count, bbox
+            FROM data_snapshots
+            ORDER BY id DESC
+            LIMIT 5
+            """,
+        )
+    return {
+        "database": str(DATABASE_PATH),
+        "route_request_count": route_count,
+        "data_snapshot_count": snapshot_count,
+        "latest_route_requests": latest_routes,
+        "latest_data_snapshots": latest_snapshots,
+    }
+
+
+@app.get("/api/routes/history")
+def route_history(limit: int = Query(default=10, ge=1, le=50)) -> dict[str, Any]:
+    init_database()
+    with db_connection() as conn:
+        rows = fetch_rows(
+            conn,
+            """
+            SELECT id, created_at, router, start_lat, start_lng, end_lat, end_lng,
+                   normal_distance_m, safe_distance_m, normal_risk_score,
+                   safe_risk_score, risk_reduction_percent, safe_option_count,
+                   explanation_summary
+            FROM route_requests
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+    return {"items": rows}
 
 
 @app.get("/api/accidents")
@@ -318,7 +535,7 @@ def routes(payload: RouteRequest) -> dict[str, Any]:
     straight_distance = haversine_m(start, end)
     if straight_distance < 20:
         empty = build_route_summary([start, end], accident_points, safety_features)
-        return {
+        result = {
             "router": "none",
             "algorithm": {
                 "name": "No route needed",
@@ -340,6 +557,8 @@ def routes(payload: RouteRequest) -> dict[str, Any]:
             },
             "message": "Start and destination are too close to compare routes.",
         }
+        store_route_request(start, end, result)
+        return result
 
     route_result = try_osmnx_routes(start, end, accident_points, safety_features)
     if not route_result:
@@ -408,6 +627,7 @@ def routes(payload: RouteRequest) -> dict[str, Any]:
     )
     result["safe"]["explanation"] = result["explanation"]
     result["safe_options"][0]["explanation"] = result["explanation"]
+    store_route_request(start, end, result)
     return result
 
 
@@ -756,6 +976,7 @@ def load_accidents() -> dict[str, Any]:
 
     _accident_cache["payload"] = payload
     _accident_cache["expires_at"] = now + ACCIDENT_CACHE_TTL_SECONDS
+    store_data_snapshot("accidents", payload)
     return payload
 
 
@@ -813,6 +1034,7 @@ def load_safety_features(bbox: tuple[float, float, float, float]) -> dict[str, A
         "expires_at": time.time() + ACCIDENT_CACHE_TTL_SECONDS,
         "payload": payload,
     }
+    store_data_snapshot("safety", payload, bbox)
     return payload
 
 

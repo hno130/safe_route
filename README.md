@@ -23,6 +23,7 @@
 
 - FastAPI
 - Python
+- SQLite
 - OSMnx
 - NetworkX
 - KOROAD 보행자 교통사고 다발지역 API
@@ -182,6 +183,39 @@ $env:KOROAD_YEAR="2024"
 
 KOROAD API 호출이 실패하거나 좌표 데이터가 부족한 경우에도 데모가 멈추지 않도록 서울 샘플 사고 데이터를 fallback으로 사용합니다.
 
+## Database 구성
+
+SQLite를 사용하여 서비스 실행 중 생성되는 데이터를 저장합니다.
+
+기본 DB 파일은 프로젝트 루트의 `safewalk.db`입니다.
+
+```powershell
+$env:SAFEWALK_DB_PATH="./safewalk.db"
+```
+
+저장되는 데이터는 다음과 같습니다.
+
+- 사용자가 요청한 출발지와 도착지
+- 사용된 라우터 종류
+- 일반 경로와 안전 경로의 거리
+- 일반 경로와 안전 경로의 위험도
+- 위험 절감률
+- 안전 경로 후보 개수
+- 경로 추천 이유 설명
+- 사고데이터와 안전시설 데이터 조회 스냅샷 메타데이터
+
+생성되는 주요 테이블은 다음과 같습니다.
+
+- `route_requests`: 경로 추천 요청과 결과 저장
+- `data_snapshots`: 공공데이터 및 안전시설 데이터 조회 이력 저장
+
+DB 저장 상태는 아래 API로 확인할 수 있습니다.
+
+```http
+GET /api/db/stats
+GET /api/routes/history
+```
+
 ## 경로 설명 기능
 
 `POST /api/routes` 응답에는 `explanation` 객체가 포함됩니다.
@@ -250,6 +284,20 @@ POST /api/routes
 - `safe_options`: 선택 가능한 안전 경로 후보 목록
 - `comparison`: 일반 경로와 안전 경로의 비교 결과
 - `explanation`: 추천 이유 설명
+
+### Database 확인
+
+```http
+GET /api/db/stats
+```
+
+DB 파일 경로, 저장된 경로 요청 수, 공공데이터 스냅샷 수, 최근 저장 데이터를 반환합니다.
+
+```http
+GET /api/routes/history
+```
+
+최근 경로 추천 요청 이력을 반환합니다.
 
 ## 프로젝트 구조
 
