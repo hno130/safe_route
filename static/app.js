@@ -27,6 +27,14 @@ const map = L.map("map", {
 }).setView(seoulCenter, 12);
 window.safeWalkMap = map;
 
+const mapElement = document.querySelector("#map");
+if (window.ResizeObserver && mapElement) {
+  const mapResizeObserver = new ResizeObserver(() => {
+    requestAnimationFrame(() => map.invalidateSize({ animate: false }));
+  });
+  mapResizeObserver.observe(mapElement);
+}
+
 L.control.zoom({ position: "bottomleft" }).addTo(map);
 
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -72,6 +80,7 @@ const els = {
   resetBtn: document.querySelector("#resetBtn"),
   locateBtn: document.querySelector("#locateBtn"),
   demoRouteBtn: document.querySelector("#demoRouteBtn"),
+  routeLoading: document.querySelector("#routeLoading"),
 };
 
 const markerIcons = {
@@ -94,9 +103,13 @@ function initialize() {
     window.lucide.createIcons();
   }
 
-  window.addEventListener("load", refreshMapSize);
+  window.addEventListener("load", () => {
+    refreshMapSize();
+    setTimeout(refreshMapSize, 150);
+    setTimeout(refreshMapSize, 500);
+  });
   window.addEventListener("resize", refreshMapSize);
-  requestAnimationFrame(refreshMapSize);
+  requestAnimationFrame(() => requestAnimationFrame(refreshMapSize));
   setTimeout(refreshMapSize, 250);
 
   map.on("click", handleMapClick);
@@ -252,6 +265,7 @@ async function requestRoutes() {
   if (!state.start || !state.end) return;
 
   state.loadingRoute = true;
+  setRouteLoading(true);
   clearRoutes();
   updateSteps(true);
   setMessage("경로 분석 중");
@@ -281,6 +295,7 @@ async function requestRoutes() {
     setMessage("경로를 계산하지 못했습니다");
   } finally {
     state.loadingRoute = false;
+    setRouteLoading(false);
     updateSteps();
   }
 }
@@ -1158,6 +1173,12 @@ function toPoint(latlng) {
 
 function formatPoint(point) {
   return `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
+}
+
+function setRouteLoading(isLoading) {
+  if (!els.routeLoading) return;
+  els.routeLoading.classList.toggle("visible", isLoading);
+  els.routeLoading.setAttribute("aria-hidden", isLoading ? "false" : "true");
 }
 
 function setMessage(message) {
